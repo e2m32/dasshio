@@ -15,11 +15,10 @@ import time
 import signal
 import re
 
-
 def signal_handler(signal, frame):
     sys.exit(0)
 
-
+CAPTUREDBUTTON = {}
 def arp_display(pkt):
     mac = ""
 
@@ -31,6 +30,13 @@ def arp_display(pkt):
     for button in config["buttons"]:
         if mac == button["address"].lower():
 
+            timelapsed = time.time() - button["last_press_t"]
+            if timelapsed < button["timeout"]:
+                logging.info(button["name"] + " button pressed before it's timeout has expired!")
+                logging.info("Waiting %.1f seconds before registering new button press."
+                             % (button["timeout"] - timelapsed))
+                return False
+
             idx = [button["address"].lower()
                    for button in config["buttons"]].index(mac)
             button = config["buttons"][idx]
@@ -38,7 +44,6 @@ def arp_display(pkt):
             logging.info(button["name"] + " button pressed!")
 
             url_request = ""
-
             if "url" in button:
                 url_request = button["url"]
             else:
@@ -53,7 +58,7 @@ def arp_display(pkt):
                         button["body"]), headers=json.loads(button["headers"]))
                 else:
                     request = requests.post(url_request, json=json.loads(
-                        button["service_data"]))
+                        button["service_data"]), headers={'x-ha-access': os.environ.get('HASSIO_TOKEN')})
 
                 logging.info("Status Code: {}".format(request.status_code))
 
@@ -66,6 +71,10 @@ def arp_display(pkt):
                     "Unable to perform  request: Check [url], [body], [headers] and API password or\
                      [domain], [service] and [service_data] format.")
 
+            global CAPTUREDBUTTON
+            CAPTUREDBUTTON = button
+            button["last_press_t"] = time.time()
+            
             return True
 
 
@@ -92,7 +101,8 @@ stdoutHandler.setFormatter(formater)
 logger.addHandler(stdoutHandler)
 
 # Read config file
-logging.info("Reading config file: /data/options.json")
+logging.info("fork... Reading config file: /data/options.json")
+
 
 with open(path + "/data/options.json", mode="r") as data_file:
     config = json.load(data_file)
@@ -133,6 +143,8 @@ for button in config["buttons"]:
                                   str(button_counter) + ": No [domain] or [service] provided")
                     error = True
                 button[value] = "{}"
+    button["timeout"] = config["timeout"]
+    button["last_press_t"] = time.time() - button["timeout"]
 
 if error:
     logging.info("Exiting...")
@@ -142,6 +154,7 @@ if error:
 while True:
     # Start sniffing
     logging.info("Starting sniffing...")
+    btime = time.time()
     try:
         sniff(stop_filter=arp_display,
               filter="arp or (udp and src port 68 and dst port 67 and src host 0.0.0.0)",
@@ -150,5 +163,5 @@ while True:
     except(OSError):
         pass
     timeout = config["timeout"]
-    logging.info("Packet captured, waiting " + str(timeout) + "s ...")
-    time.sleep(timeout)
+    logging.info("Packet captured, waiting " + str(timeout) + "s for button " + CAPTUREDBUTTON["name"] + "...")
+    #time.sleep(timeout)
